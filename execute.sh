@@ -1,4 +1,6 @@
 #!/bin/bash
 
-go build .
+set -euxo pipefail
+
+go build . 
 ./playserver

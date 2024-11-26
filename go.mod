@@ -4,6 +4,7 @@ go 1.23.2
 
 require (
 	github.com/Azure/go-autorest/autorest/to v0.4.0
+	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	k8s.io/api v0.31.3
 	k8s.io/apimachinery v0.31.3
@@ -25,7 +26,6 @@ require (
 	github.com/google/gnostic-models v0.6.8 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/gofuzz v1.2.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/imdario/mergo v0.3.6 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect

@@ -18,6 +18,7 @@ import (
     "k8s.io/client-go/kubernetes"
     "github.com/Azure/go-autorest/autorest/to"
 	"log"
+	"github.com/techswarn/playserver/handlers"
 )
 
 var cs *kubernetes.Clientset
@@ -92,6 +93,7 @@ func health(w http.ResponseWriter, r *http.Request) {
 		Message string
 	}
 	res := Response{ Message: "API is live"}
+	handlers.Createpod()
 	log.Println("Serving:", r.URL.Path, "from", r.Host)
 	//Set Content-Type header so that clients will know how to read response
 	w.Header().Set("Content-Type","application/json")

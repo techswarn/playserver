@@ -30,6 +30,7 @@ func main() {
 	}
 	mux.Handle("/api/v1/health", http.HandlerFunc(handlers.Health))
 	mux.Handle("/api/v1/deploy", http.HandlerFunc(handlers.CreatPodHandler))
+//	mux.Handle("/api/v1/exec", http.HandlerFunc(handlers.ExeCmd))
 	mux.Handle("/ws", http.HandlerFunc(handlers.SocketHandler))
     // http.HandleFunc("/", handler)
 	// http.HandleFunc("/api", creatPodHandler)

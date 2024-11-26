@@ -7,16 +7,20 @@ import (
 	"time"
 	"encoding/json"
 	"github.com/google/uuid"
+	"bytes"
 	//"strconv"
-	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     appv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 //	netv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	//restclient "k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
     "github.com/Azure/go-autorest/autorest/to"
 	"log"
 	"github.com/techswarn/playserver/utils"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 
@@ -31,6 +35,7 @@ type Deploy struct {
 	CreatedAt time.Time `json:"createdate"`
 }
 
+//HEALTH CHECK HANDLER
 func Health(w http.ResponseWriter, r *http.Request) {
 	type Response struct {
 		Message string
@@ -44,6 +49,7 @@ func Health(w http.ResponseWriter, r *http.Request) {
 	w.Write(resJson)
 }
 
+//CREATE DEPLOYMENT HANDLER
 func CreatPodHandler(w http.ResponseWriter, r *http.Request){
 	fmt.Println(r.Method)
 	if r.Method != "POST" {
@@ -69,10 +75,9 @@ func CreatPodHandler(w http.ResponseWriter, r *http.Request){
 	ns := "app-" + id.String()
 	fmt.Println(ns)
 	namespace := createNamespace(ctx, cs, ns)
-    log.Printf("Create namespace response: %#v \n", namespace)
 	//create an nginx deployment named "hello-world" in the nsFoo namespace
 	deployment := deployNginx(ctx, cs, namespace, deploy.Name)
-	log.Printf("Is deployed %#v", deployment)
+	//log.Printf("Is deployed %#v", deployment)
 
 	if(deployment.Status) {
 		w.Header().Set("Content-Type","application/json")
@@ -144,6 +149,7 @@ func createNginxDeployment(ctx context.Context, clientSet *kubernetes.Clientset,
 		},
 	}
 	deployment, err := clientSet.AppsV1().Deployments(ns.Name).Create(ctx, deployment, metav1.CreateOptions{})
+	//log.Printf(" deployment: %#v", deployment)
 	panicIfError(err)
 	return deployment
 }
@@ -195,4 +201,72 @@ func panicIfError(err error) {
 	if err != nil {
 		panic(err.Error())
 	}
+}
+
+
+//EXECUTE COMMAND HANDLER
+func ExeCmd(w http.ResponseWriter, r *http.Request) (string, string, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pods := getpods(ctx, cs, "app-0e9860cb-939a-4a4f-89f0-480961aa2c74")
+	fmt.Printf("string: %s \n", pods.Items[0].Name)
+	outstr, errstr, err := ExecuteRemoteCommand("app-0e9860cb-939a-4a4f-89f0-480961aa2c74", pods.Items[0].Name, "ls -al")
+
+	return outstr, errstr, err
+}
+
+//GET PODS
+func getpods(ctx context.Context, clientSet *kubernetes.Clientset, ns string) *corev1.PodList {
+	pods, err := clientSet.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
+	panicIfError(err)
+	//fmt.Printf("=====PODS======%#v \n", pods)
+	// for _, pod := range pods.Items {
+	// 	fmt.Printf("Pod name: %v \n", pod)
+	// }
+	return pods
+}
+//pod *corev1.Pod, 
+func ExecuteRemoteCommand( ns string, pod string, command string) (string, string, error) {
+    fmt.Println(ns)
+	fmt.Println(pod)
+	fmt.Println(command)
+	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(),
+		&clientcmd.ConfigOverrides{},
+	)
+	restCfg, err := kubeCfg.ClientConfig()
+	if err != nil {
+		return "", "", err
+	}
+	coreClient, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		return "", "", err
+	}
+
+	buf := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	request := coreClient.CoreV1().RESTClient().
+		Post().
+		Namespace(ns).
+		Resource("pods").
+		Name(pod).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Command: []string{"/bin/sh", "-c", command},
+			Stdin:   false,
+			Stdout:  true,
+			Stderr:  true,
+			TTY:     true,
+		}, scheme.ParameterCodec)
+	exec, err := remotecommand.NewSPDYExecutor(restCfg, "POST", request.URL())
+	err = exec.Stream(remotecommand.StreamOptions{
+		Stdout: buf,
+		Stderr: errBuf,
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("%w Failed executing command %s on %v/%v", err, command, "pod.Namespace", "pod.Name")
+	}
+	fmt.Print(buf.String())
+	fmt.Print(errBuf.String())
+	return buf.String(), errBuf.String(), nil
 }

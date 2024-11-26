@@ -34,8 +34,11 @@ func SocketHandler(w http.ResponseWriter, r *http.Request) {
 	// log.Println("Is deployed ", isDeployed)
 
     for {
+
         messageType, p, err := conn.ReadMessage()
 		myString := string(p)
+		outstr, _, _ := ExeCmd(myString)
+		
 	    log.Println(myString)
 
         if err != nil {
@@ -43,7 +46,7 @@ func SocketHandler(w http.ResponseWriter, r *http.Request) {
           //  deleteNamespace(ctx, cs, nsFoo)
             return
         }
-        if err := conn.WriteMessage(messageType, p); err != nil {
+        if err := conn.WriteMessage(messageType, []byte(outstr)); err != nil {
             log.Println(err)
             return
         }

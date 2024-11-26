@@ -7,6 +7,8 @@ import (
 	"context"
 	"time"
 	"os"
+	"encoding/json"
+	"github.com/google/uuid"
 	//"strconv"
 	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     appv1 "k8s.io/api/apps/v1"
@@ -15,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     "k8s.io/client-go/kubernetes"
     "github.com/Azure/go-autorest/autorest/to"
+	"log"
 )
 
 var cs *kubernetes.Clientset
@@ -35,16 +38,70 @@ var upgrader = websocket.Upgrader{
     },
 }
 
-
-
-func creatPodHandler(w http.ResponseWriter, r *http.Request){
-	// If this handler is called create a pod and send a JSON with necessary pod details
-	fmt.Fprintf(w, "Serving: %s\n", r.URL.Path)
-	fmt.Printf("Served: %s\n", r.Host)
+type Deploy struct {
+	Name string `json:"name"`
+	CreatedAt time.Time `json:"createdate"`
 }
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("handler")
+func creatPodHandler(w http.ResponseWriter, r *http.Request){
+	fmt.Println(r.Method)
+	if r.Method != "POST" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	// If this handler is called create a pod and send a JSON with necessary pod details
+
+
+	deploy := Deploy{}
+
+	err := json.NewDecoder(r.Body).Decode(&deploy)
+	if err != nil{
+		panic(err)
+	}
+
+	deploy.CreatedAt = time.Now().Local()
+    //create a namespace named "foo" and delete it when main exits
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	id := uuid.New()
+
+	ns := "app-" + id.String()
+	fmt.Println(ns)
+	namespace := createNamespace(ctx, cs, ns)
+    log.Printf("Create namespace response: %#v \n", namespace)
+	//create an nginx deployment named "hello-world" in the nsFoo namespace
+	deployment := deployNginx(ctx, cs, namespace, deploy.Name)
+	log.Printf("Is deployed %#v", deployment)
+
+	if(deployment.Status) {
+		w.Header().Set("Content-Type","application/json")
+		w.WriteHeader(http.StatusCreated)
+	    deployRes, err := json.Marshal(deployment)
+		if err != nil{
+			panic(err)
+		}
+		w.Write(deployRes)
+	} else {
+		w.Header().Set("Content-Type","application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+func health(w http.ResponseWriter, r *http.Request) {
+	type Response struct {
+		Message string
+	}
+	res := Response{ Message: "API is live"}
+	log.Println("Serving:", r.URL.Path, "from", r.Host)
+	//Set Content-Type header so that clients will know how to read response
+	w.Header().Set("Content-Type","application/json")
+	w.WriteHeader(http.StatusOK)
+	resJson, _ := json.Marshal(res)
+	w.Write(resJson)
+}
+
+func socketHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("socketHandler")
     conn, err := upgrader.Upgrade(w, r, nil)
     if err != nil {
         fmt.Println(err)
@@ -86,12 +143,24 @@ func main() {
 		PORT = ":" + arguments[1]
 	}
 	fmt.Println("Using port number: ", PORT)
-	
-	fmt.Println("Using port number: ", PORT)
-    http.HandleFunc("/", handler)
-	http.HandleFunc("/api", creatPodHandler)
 
-	err := http.ListenAndServe(PORT, nil)
+	mux := http.NewServeMux()
+
+	s := &http.Server{
+		Addr:         PORT,
+		Handler:      mux,
+		IdleTimeout:  100 * time.Second,
+		ReadTimeout:  100 * time.Second,
+		WriteTimeout: 100 * time.Second,
+	}
+
+	mux.Handle("/api/v1/health", http.HandlerFunc(health))
+	mux.Handle("/api/v1/deploy", http.HandlerFunc(creatPodHandler))
+	mux.Handle("/ws", http.HandlerFunc(socketHandler))
+    // http.HandleFunc("/", handler)
+	// http.HandleFunc("/api", creatPodHandler)
+
+	err := s.ListenAndServe()
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -158,14 +227,23 @@ func createNginxDeployment(ctx context.Context, clientSet *kubernetes.Clientset,
 	return deployment
 }
 
-func waitForReadyReplicas(ctx context.Context, clientSet *kubernetes.Clientset, deployment *appv1.Deployment) bool {
+type Replica struct {
+	Name string
+	Status bool
+}
+
+func waitForReadyReplicas(ctx context.Context, clientSet *kubernetes.Clientset, deployment *appv1.Deployment) *Replica {
+
 	fmt.Printf("Waiting for ready replicas in deployment %q\n", deployment.Name)
 	for {
 		expectedReplicas := *deployment.Spec.Replicas
 		readyReplicas := getReadyReplicasForDeployment(ctx, clientSet, deployment)
 		if readyReplicas == expectedReplicas {
 			fmt.Printf("replicas are ready!\n\n")
-			return true
+			return &Replica{
+				Name: deployment.Name,
+				Status: true,
+			}
 			break
 		}
 
@@ -173,7 +251,10 @@ func waitForReadyReplicas(ctx context.Context, clientSet *kubernetes.Clientset, 
 		time.Sleep(1 * time.Second)
 	}
 
-	return false
+	return &Replica{
+		Name: "",
+		Status: false,
+	}
 }
 
 func getReadyReplicasForDeployment(ctx context.Context, clientSet *kubernetes.Clientset, deployment *appv1.Deployment) int32 {
@@ -183,7 +264,7 @@ func getReadyReplicasForDeployment(ctx context.Context, clientSet *kubernetes.Cl
 	return dep.Status.ReadyReplicas
 }
 
-func deployNginx(ctx context.Context, clientSet *kubernetes.Clientset, ns *corev1.Namespace, name string) bool{
+func deployNginx(ctx context.Context, clientSet *kubernetes.Clientset, ns *corev1.Namespace, name string) *Replica {
 	deployment := createNginxDeployment(ctx, clientSet, ns, name)
 	s := waitForReadyReplicas(ctx, clientSet, deployment)
 	return s

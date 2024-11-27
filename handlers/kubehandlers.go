@@ -253,9 +253,9 @@ func ExecuteRemoteCommand( ns string, pod string, command string) (string, strin
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Command: []string{"/bin/sh", "-c", command},
-			Stdin:   true,
+			Stdin:   false,
 			Stdout:  true,
-			Stderr:  false,
+			Stderr:  true,
 			TTY:     true,
 		}, scheme.ParameterCodec)
 	exec, err := remotecommand.NewSPDYExecutor(restCfg, "POST", request.URL())

@@ -205,12 +205,12 @@ func panicIfError(err error) {
 
 
 //EXECUTE COMMAND HANDLER
-func ExeCmd(w http.ResponseWriter, r *http.Request) (string, string, error) {
+func ExeCmd(cmd string) (string, string, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	pods := getpods(ctx, cs, "app-0e9860cb-939a-4a4f-89f0-480961aa2c74")
 	fmt.Printf("string: %s \n", pods.Items[0].Name)
-	outstr, errstr, err := ExecuteRemoteCommand("app-0e9860cb-939a-4a4f-89f0-480961aa2c74", pods.Items[0].Name, "ls -al")
+	outstr, errstr, err := ExecuteRemoteCommand("app-0e9860cb-939a-4a4f-89f0-480961aa2c74", pods.Items[0].Name, cmd)
 
 	return outstr, errstr, err
 }
@@ -253,12 +253,16 @@ func ExecuteRemoteCommand( ns string, pod string, command string) (string, strin
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Command: []string{"/bin/sh", "-c", command},
-			Stdin:   false,
+			Stdin:   true,
 			Stdout:  true,
-			Stderr:  true,
+			Stderr:  false,
 			TTY:     true,
 		}, scheme.ParameterCodec)
 	exec, err := remotecommand.NewSPDYExecutor(restCfg, "POST", request.URL())
+	if err != nil {
+		log.Printf("Error during NewSPDYExecutor %s \n", err)
+	}
+
 	err = exec.Stream(remotecommand.StreamOptions{
 		Stdout: buf,
 		Stderr: errBuf,
@@ -267,6 +271,6 @@ func ExecuteRemoteCommand( ns string, pod string, command string) (string, strin
 		return "", "", fmt.Errorf("%w Failed executing command %s on %v/%v", err, command, "pod.Namespace", "pod.Name")
 	}
 	fmt.Print(buf.String())
-	fmt.Print(errBuf.String())
+	fmt.Println(errBuf)
 	return buf.String(), errBuf.String(), nil
 }

@@ -39,7 +39,7 @@ func SocketHandler(w http.ResponseWriter, r *http.Request) {
 		myString := string(p)
 		outstr, _, _ := ExeCmd(myString)
 		
-	    log.Println(myString)
+	   // log.Println(myString)
 
         if err != nil {
             log.Printf("CLOSED: %s \n", err)

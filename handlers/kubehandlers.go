@@ -21,6 +21,10 @@ import (
 	"log"
 	"github.com/techswarn/playserver/utils"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"strings"
+	"os"
+
 )
 
 
@@ -136,12 +140,13 @@ func createNginxDeployment(ctx context.Context, clientSet *kubernetes.Clientset,
 					Containers: []corev1.Container{
 						{
 							Name:  name,
-							Image: "nginxdemos/hello:latest",
+							Image: "ubuntu:latest",
 							Ports: []corev1.ContainerPort{
 								{
 									ContainerPort: 80,
-								},
+								},						
 							},
+							Command: []string{"/bin/sh", "-c", "sleep 50000"},
 						},
 					},
 				},
@@ -205,12 +210,12 @@ func panicIfError(err error) {
 
 
 //EXECUTE COMMAND HANDLER
-func ExeCmd(cmd string) (string, string, error) {
+func ExeCmd(cmd string) (string, int, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	pods := getpods(ctx, cs, "app-0e9860cb-939a-4a4f-89f0-480961aa2c74")
+	pods := getpods(ctx, cs, "app-dc236ebb-9a03-40d5-99c3-828464f92208")
 	fmt.Printf("string: %s \n", pods.Items[0].Name)
-	outstr, errstr, err := ExecuteRemoteCommand("app-0e9860cb-939a-4a4f-89f0-480961aa2c74", pods.Items[0].Name, cmd)
+	outstr, errstr, err := ExecuteRemoteCommand("app-dc236ebb-9a03-40d5-99c3-828464f92208", pods.Items[0].Name, cmd)
 
 	return outstr, errstr, err
 }
@@ -226,25 +231,42 @@ func getpods(ctx context.Context, clientSet *kubernetes.Clientset, ns string) *c
 	return pods
 }
 //pod *corev1.Pod, 
-func ExecuteRemoteCommand( ns string, pod string, command string) (string, string, error) {
-    fmt.Println(ns)
-	fmt.Println(pod)
-	fmt.Println(command)
+type LogStreamer struct{
+    b bytes.Buffer
+}
+
+func (l *LogStreamer) String() string {
+    return l.b.String()
+}
+
+func (l *LogStreamer) Write(p []byte) (n int, err error) {
+    a := string(p)
+    l.b.WriteString(a)
+    log.Println(a)
+    return len(p), nil
+}
+
+func ExecuteRemoteCommand( ns string, pod string, command string) (string, int, error) {
+  //  fmt.Println(ns)
+	//fmt.Println(pod)
+	//fmt.Println(command)
+
+	
 	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		clientcmd.NewDefaultClientConfigLoadingRules(),
 		&clientcmd.ConfigOverrides{},
 	)
 	restCfg, err := kubeCfg.ClientConfig()
 	if err != nil {
-		return "", "", err
+		return "", 1, err
 	}
 	coreClient, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		return "", "", err
+		return "", 1, err
 	}
 
-	buf := &bytes.Buffer{}
-	errBuf := &bytes.Buffer{}
+//	buf := &bytes.Buffer{}
+//	errBuf := &bytes.Buffer{}
 	request := coreClient.CoreV1().RESTClient().
 		Post().
 		Namespace(ns).
@@ -253,24 +275,30 @@ func ExecuteRemoteCommand( ns string, pod string, command string) (string, strin
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Command: []string{"/bin/sh", "-c", command},
-			Stdin:   false,
-			Stdout:  true,
-			Stderr:  true,
-			TTY:     true,
+			Stdin:     true,
+			Stdout:    true,
+			Stderr:    false,
+			TTY:       true,
 		}, scheme.ParameterCodec)
 	exec, err := remotecommand.NewSPDYExecutor(restCfg, "POST", request.URL())
 	if err != nil {
 		log.Printf("Error during NewSPDYExecutor %s \n", err)
 	}
+    var streamErr error
+    l := &LogStreamer{}
+	streamErr = exec.Stream(remotecommand.StreamOptions{
+        Stdin:  os.Stdin,
+        Stdout: l,
+        Stderr: nil,
+        Tty:    true,
+    })
+    if streamErr != nil {
+        if strings.Contains(streamErr.Error(), "command terminated with exit code") {
+            return l.String(), 1, nil
+        } else {
+            return "", 0, fmt.Errorf("could not stream results: %w", streamErr)
+        }
+    }
 
-	err = exec.Stream(remotecommand.StreamOptions{
-		Stdout: buf,
-		Stderr: errBuf,
-	})
-	if err != nil {
-		return "", "", fmt.Errorf("%w Failed executing command %s on %v/%v", err, command, "pod.Namespace", "pod.Name")
-	}
-	fmt.Print(buf.String())
-	fmt.Println(errBuf)
-	return buf.String(), errBuf.String(), nil
+	return l.String(), 0, nil
 }

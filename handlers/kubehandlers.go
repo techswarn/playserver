@@ -211,12 +211,12 @@ func panicIfError(err error) {
 
 //EXECUTE COMMAND HANDLER
 func ExeCmd(cmd string) (string, int, error) {
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	pods := getpods(ctx, cs, "app-dc236ebb-9a03-40d5-99c3-828464f92208")
 	fmt.Printf("string: %s \n", pods.Items[0].Name)
 	outstr, errstr, err := ExecuteRemoteCommand("app-dc236ebb-9a03-40d5-99c3-828464f92208", pods.Items[0].Name, cmd)
-
 	return outstr, errstr, err
 }
 
@@ -249,7 +249,7 @@ func (l *LogStreamer) Write(p []byte) (n int, err error) {
 func ExecuteRemoteCommand( ns string, pod string, command string) (string, int, error) {
   //  fmt.Println(ns)
 	//fmt.Println(pod)
-	//fmt.Println(command)
+	fmt.Printf("Command: %s \n", command)
 
 	
 	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
@@ -292,6 +292,8 @@ func ExecuteRemoteCommand( ns string, pod string, command string) (string, int, 
         Stderr: nil,
         Tty:    true,
     })
+	log.Printf("OUTPUT STREAM ================ %s \n", l)
+
     if streamErr != nil {
         if strings.Contains(streamErr.Error(), "command terminated with exit code") {
             return l.String(), 1, nil

@@ -9,6 +9,8 @@ import (
 	//"strconv"
 	//"log"
 	"github.com/techswarn/playserver/handlers"
+	"github.com/techswarn/playserver/database"
+	"github.com/techswarn/playserver/utils"
 )
 
 func main() {
@@ -18,7 +20,7 @@ func main() {
 		PORT = ":" + arguments[1]
 	}
 	fmt.Println("Using port number: ", PORT)
-
+	database.InitDatabase(utils.GetValue("DB_NAME"))
 	mux := http.NewServeMux()
 
 	s := &http.Server{

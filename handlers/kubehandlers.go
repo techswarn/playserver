@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"github.com/google/uuid"
 	"bytes"
-	//"strconv"
+	"strconv"
     appv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 //	netv1 "k8s.io/api/networking/v1"
@@ -21,22 +21,27 @@ import (
 	"log"
 	"github.com/techswarn/playserver/utils"
 	"k8s.io/client-go/tools/clientcmd"
-
+	"math/rand"
 	"strings"
 	"os"
 
+	"github.com/go-redis/redis/v8"
+	"github.com/techswarn/playserver/models"
+	"github.com/techswarn/playserver/database"
 )
 
-
+//Create clients
 var cs *kubernetes.Clientset
+var rs *redis.Client
+
 func init() {
     cs, _ = utils.GetKubehandle()
+	rs  = utils.Client()
 }
 
-
-type Deploy struct {
-	Name string `json:"name"`
-	CreatedAt time.Time `json:"createdate"`
+type JobInfo struct {
+	JobId string `json:"jobid"`
+	DeployID string  `json:"deployid"`
 }
 
 //HEALTH CHECK HANDLER
@@ -53,7 +58,8 @@ func Health(w http.ResponseWriter, r *http.Request) {
 	w.Write(resJson)
 }
 
-//CREATE DEPLOYMENT HANDLER
+//ADD DEPLOY DETAILS TO REDIS QUEUE
+
 func CreatPodHandler(w http.ResponseWriter, r *http.Request){
 	fmt.Println(r.Method)
 	if r.Method != "POST" {
@@ -63,43 +69,118 @@ func CreatPodHandler(w http.ResponseWriter, r *http.Request){
 	// If this handler is called create a pod and send a JSON with necessary pod details
 
 
-	deploy := Deploy{}
+	deployRequest := models.DeployRequest{}
 
-	err := json.NewDecoder(r.Body).Decode(&deploy)
+	err := json.NewDecoder(r.Body).Decode(&deployRequest)
 	if err != nil{
 		panic(err)
 	}
+	log.Printf("Deploy request:--- %#v \n", deployRequest)
 
-	deploy.CreatedAt = time.Now().Local()
     //create a namespace named "foo" and delete it when main exits
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	id := uuid.New()
-
-	ns := "app-" + id.String()
+	
+	ns := "app-" + uuid.New().String()
 	fmt.Println(ns)
-	namespace := createNamespace(ctx, cs, ns)
-	//create an nginx deployment named "hello-world" in the nsFoo namespace
-	deployment := deployNginx(ctx, cs, namespace, deploy.Name)
-	//log.Printf("Is deployed %#v", deployment)
 
-	if(deployment.Status) {
+	//deployId := uuid.New() 
+	//deploy.CreatedAt = time.Now().Local()
+	namespace := createNamespace(ctx, cs, ns)
+	log.Printf("Creating namespace %#v \n", namespace)
+		// validate the request
+    errors := deployRequest.ValidateStruct()
+	log.Printf("Validation error %#v \n", errors)
+	//if validation is failed, return the validation errors
+	if errors != nil {
 		w.Header().Set("Content-Type","application/json")
-		w.WriteHeader(http.StatusCreated)
-	    deployRes, err := json.Marshal(deployment)
+		w.WriteHeader(http.StatusBadRequest)
+	    res := &models.Response[[]*models.ErrorResponse]{
+			Success: false,
+			Message: "validation failed",
+			Data: errors,
+		} 
+		insertdeploy, err := json.Marshal(res)
 		if err != nil{
 			panic(err)
 		}
-		w.Write(deployRes)
-	} else {
-		w.Header().Set("Content-Type","application/json")
-		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(insertdeploy)		
 	}
+	var deploy models.Deploy
+	deploy = models.Deploy{
+		Id : uuid.New().String(),
+		Name : deployRequest.Name,
+		Image : deployRequest.Image,
+		Namespace : ns,
+		CreatedAt : time.Now(),
+	}
+	log.Printf("Deployment details %#v", deploy)
+	if result := database.DB.Create(&deploy); result.Error != nil {
+		fmt.Printf("DB write error: %s", &result.Error)
+		panic(&result.Error)
+	}
+	jobID := strconv.Itoa(rand.Intn(1000) + 1)
+	jobInfo := JobInfo{JobId: jobID, DeployID: deploy.Id}
+	job, err := json.Marshal(jobInfo)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = rs.LPush(context.Background(), "jobs", job).Err()
+	if err != nil {
+		log.Fatal("lpush issue", err)
+	}
+
+
+	//As soon as the details is incerted to db poluate the value in redis queue
+
+
+	// result := database.DB.Create(&deploy)
+	// log.Printf("RESULT %#v", result)
+	res := &models.Response[*models.Deploy]{
+		Success: true,
+		Message: "Queued deployment",
+		Data: &deploy,
+	} 
+	//Return the deployment data stored
+	 w.Header().Set("Content-Type","application/json")
+	 w.Header().Add("jobid", jobID)
+	 w.WriteHeader(http.StatusCreated)
+	 deployRes, err := json.Marshal(res)
+	 if err != nil{
+		panic(err)
+	 }
+	w.Write(deployRes)
+
+
+//	log.Printf("Deployment details %#v", deploy)
+	//create an nginx deployment named "hello-world" in the nsFoo namespace
+//	deployment, s := CreateDeploy(ctx, cs, namespace, deployRequest.Name, deployRequest.Image)
+//	log.Printf("Is deployed %#v", s)
+//	log.Printf("Deployment details %#v", deployment.ObjectMeta)
+
+	//Get deployment details and then update MYSQL DB
+	//deployID := string(deployment.ObjectMeta.UID)
+	//CreateAt := time.Now()
+
+	// log.Printf("Update details to db %#v", deploy)
+	// if(s.Status) {
+	// 	w.Header().Set("Content-Type","application/json")
+	// 	w.WriteHeader(http.StatusCreated)
+	//     deployRes, err := json.Marshal(deployment)
+	// 	if err != nil{
+	// 		panic(err)
+	// 	}
+	// 	w.Write(deployRes)
+	// } else {
+	// 	w.Header().Set("Content-Type","application/json")
+	// 	w.WriteHeader(http.StatusInternalServerError)
+	// }
 }
 
 //Create Namespace:
 func createNamespace(ctx context.Context, clientSet *kubernetes.Clientset, name string) *corev1.Namespace {
-	fmt.Printf("Creating namespace %q.\n\n", name)
+
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -117,7 +198,7 @@ func deleteNamespace(ctx context.Context, clientSet *kubernetes.Clientset, ns *c
 }
 
 //CREATE DEPLOYMENT
-func createNginxDeployment(ctx context.Context, clientSet *kubernetes.Clientset, ns *corev1.Namespace, name string) *appv1.Deployment {
+func createNginxDeployment(ctx context.Context, clientSet *kubernetes.Clientset, ns *corev1.Namespace, name string, image string) *appv1.Deployment {
 	var (
 		matchLabel = map[string]string{"app": "nginx"}
 		objMeta    = metav1.ObjectMeta{
@@ -140,7 +221,7 @@ func createNginxDeployment(ctx context.Context, clientSet *kubernetes.Clientset,
 					Containers: []corev1.Container{
 						{
 							Name:  name,
-							Image: "ubuntu:latest",
+							Image: image,
 							Ports: []corev1.ContainerPort{
 								{
 									ContainerPort: 80,
@@ -196,10 +277,10 @@ func getReadyReplicasForDeployment(ctx context.Context, clientSet *kubernetes.Cl
 	return dep.Status.ReadyReplicas
 }
 
-func deployNginx(ctx context.Context, clientSet *kubernetes.Clientset, ns *corev1.Namespace, name string) *Replica {
-	deployment := createNginxDeployment(ctx, clientSet, ns, name)
+func CreateDeploy(ctx context.Context, clientSet *kubernetes.Clientset, ns *corev1.Namespace, name string, image string) (*appv1.Deployment, *Replica) {
+	deployment := createNginxDeployment(ctx, clientSet, ns, name, image)
 	s := waitForReadyReplicas(ctx, clientSet, deployment)
-	return s
+	return deployment, s
 }
 
 func panicIfError(err error) {

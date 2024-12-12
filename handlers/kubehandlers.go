@@ -66,11 +66,8 @@ func CreatPodHandler(w http.ResponseWriter, r *http.Request){
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	// If this handler is called create a pod and send a JSON with necessary pod details
-
 
 	deployRequest := models.DeployRequest{}
-
 	err := json.NewDecoder(r.Body).Decode(&deployRequest)
 	if err != nil{
 		panic(err)
@@ -78,17 +75,13 @@ func CreatPodHandler(w http.ResponseWriter, r *http.Request){
 	log.Printf("Deploy request:--- %#v \n", deployRequest)
 
     //create a namespace named "foo" and delete it when main exits
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	//ctx, cancel := context.WithCancel(context.Background())
+	//defer cancel()
 	
-	ns := "app-" + uuid.New().String()
+	ns := "app1-" + uuid.New().String()
 	fmt.Println(ns)
 
-	//deployId := uuid.New() 
-	//deploy.CreatedAt = time.Now().Local()
-	namespace := createNamespace(ctx, cs, ns)
-	log.Printf("Creating namespace %#v \n", namespace)
-		// validate the request
+	// validate the request
     errors := deployRequest.ValidateStruct()
 	log.Printf("Validation error %#v \n", errors)
 	//if validation is failed, return the validation errors
@@ -106,6 +99,7 @@ func CreatPodHandler(w http.ResponseWriter, r *http.Request){
 		}
 		w.Write(insertdeploy)		
 	}
+
 	var deploy models.Deploy
 	deploy = models.Deploy{
 		Id : uuid.New().String(),
@@ -113,20 +107,23 @@ func CreatPodHandler(w http.ResponseWriter, r *http.Request){
 		Image : deployRequest.Image,
 		Namespace : ns,
 		CreatedAt : time.Now(),
+		Status: false,
 	}
 	log.Printf("Deployment details %#v", deploy)
 	if result := database.DB.Create(&deploy); result.Error != nil {
 		fmt.Printf("DB write error: %s", &result.Error)
 		panic(&result.Error)
 	}
+
 	jobID := strconv.Itoa(rand.Intn(1000) + 1)
 	jobInfo := JobInfo{JobId: jobID, DeployID: deploy.Id}
 	job, err := json.Marshal(jobInfo)
+
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	err = rs.LPush(context.Background(), "jobs", job).Err()
+	err = rs.LPush(context.Background(), "queue", job).Err()
 	if err != nil {
 		log.Fatal("lpush issue", err)
 	}
@@ -134,14 +131,12 @@ func CreatPodHandler(w http.ResponseWriter, r *http.Request){
 
 	//As soon as the details is incerted to db poluate the value in redis queue
 
-
-	// result := database.DB.Create(&deploy)
-	// log.Printf("RESULT %#v", result)
 	res := &models.Response[*models.Deploy]{
 		Success: true,
 		Message: "Queued deployment",
 		Data: &deploy,
 	} 
+
 	//Return the deployment data stored
 	 w.Header().Set("Content-Type","application/json")
 	 w.Header().Add("jobid", jobID)

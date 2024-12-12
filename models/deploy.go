@@ -10,5 +10,6 @@ type Deploy struct {
 	Name string `json:"name"`
 	Image string `json:"image"`
 	Namespace string `json:namespace`
+	Status bool `json:status`
 	CreatedAt time.Time `json:"createdat"`
 }
